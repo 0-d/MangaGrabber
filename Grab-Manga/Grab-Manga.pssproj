@@ -38,6 +38,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Grab-Manga.ps1" />
+    <Compile Include="GrabManga_GUI.pff" />
+    <Compile Include="GrabManga_GUI.ps1" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <Target Name="Build" />

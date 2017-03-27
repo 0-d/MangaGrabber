@@ -1,58 +1,105 @@
-﻿[CMDletBinding()]
+﻿#requires -version 3
+
+<#
+.Synopsis
+   Manga downloader for www.mangatown.com
+
+.DESCRIPTION
+   Downloads manga by given URL
+   
+   Author: Petr Egorov ()
+
+.EXAMPLE
+   .\Grab-Manga.ps1 -BaseURI 'http://www.mangatown.com/manga/angel_beats_heaven_s_door/' -OutFolder "C:\Downloads\Manga\Angel Beats! - Heaven's Door"
+#>
+
+[CMDletBinding()]
 param(
 	[Parameter(Mandatory)]
-	[string]$BaseURI, #  Example: 'http://www.mangatown.com/manga/kuzu_no_honkai'
-	[int]$ChapterStart = 1,
-	[Parameter(Mandatory)]
-	[int]$ChapterEnd,
-	[string]$ChapterExtra,
-	[ValidateSet('Chrome', 'FireFox', 'InternetExplorer', 'Opera', 'Safari')]
-	[string]$UserAgent = 'InternetExplorer'
+    [ValidateScript({[uri]::New($_)})]
+	[string]$BaseURI, #ex.: 'http://www.mangatown.com/manga/angel_beats_heaven_s_door/',
+
+    [Parameter(Mandatory)]
+    [ValidateScript({[System.IO.Path]::GetFullPath($_)})]
+    [string]$OutFolder #ex.: "C:\Downloads\Manga\Angel Beats! - Heaven's Door"
 )
 
-	$UserAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::"$UserAgent"
-	[float[]]$Chapters = $ChapterStart..$ChapterEnd
-	
+#region FUNCTIONS
 
-if ($ChapterExtra) {
-	[float[]]$Extras = $ChapterExtra.Split()
-    $Chapters = $Chapters + $Extras
-}
+workflow Get-MangaImage {
+    Param(
+        [Parameter(Mandatory)]
+        [string[]]$PagesURI,
+        [string]$Location
+    )
 
-foreach ($c in $Chapters) {
-	# Create dir for current chapter and CD to it
-    New-Item -ItemType Directory -Name "ch0$c" -Force
-    Set-Location -Path "ch0$c"
+    foreach -parallel ($Page in $PagesURI) {
+        #$pageContent = $pageDOM = $Images = $outImg = $null
 
-    $chapterURI = "$BaseURI/c0$c"
-    $chapData = Invoke-WebRequest -Uri $chapterURI -UserAgent $ua | select -ExpandProperty RawContent
-    $pattern = "\<option value=`"$chapterURI/\d{1,3}.html`"\s?\>(\d{1,3})\</option\>"
-    $optionsList = $chapData.Split("`n") | Where {$_ -match $pattern}
-    $pagesList = [int[]]($optionsList | %{($_ -replace $pattern, '$1').Trim()})
-    [int]$maxPage = $pagesList | measure -Maximum | select -ExpandProperty Maximum
+        inlineScript {
+            $pageContent = Invoke-WebRequest -Uri $using:Page -SessionVariable mangatown
+            $pageDOM = $pageContent.ParsedHtml
 
-    foreach ($p in (1..$maxPage) ) {
-        
-		# We need 3-digit name
-        $num = "00$p"
-        $num = $num[($num.Length -3)..($num.Length - 1)] -join ''
-        
-        $webpage = Invoke-WebRequest -Uri "$chapterURI/$p.html" -UserAgent $ua -SessionVariable TempMangaSession | 
-					select -ExpandProperty RawContent
+            # Get images by ID (usually only one)
+            $Images = $pageDOM.getElementById('image') | select -ExpandProperty src
 
-        $string = $webpage.Split("`n") | where {$_ -Match 'img src="http://h.mangatown.com/store/manga/'}
-        $URI = $string -replace '^.*src="(.+ttl=\d{8,12})"\s.+$', '$1'
-
-        Write-Verbose "Downloading: $URI`t"
-        try {
-            Invoke-WebRequest -Uri $URI -UserAgent $ua -OutFile "$num.jpg" -WebSession $TempMangaSession
-            Write-Verbose "OK ($num.jpg)"
-        }
-        catch {
-            Write-Verbose -f Red "FAIL: [$($_.Exception.Message)]"
+            Set-Location -Path $using:Location
+            foreach ($img in $Images) {
+                try {
+                    $outImg = [System.IO.Path]::GetFileName($img) -replace '\?.+$' # get rid of tokens, etc.
+                    
+                    Invoke-WebRequest -Uri $img -OutFile $outImg -WebSession $mangatown -ErrorAction Stop
+                    Write-Output "Downloaded [$img] to [$outImg]"
+                }
+                catch {
+                    Write-Error -Exception $_.Exception -Message "[$outImg] ERROR: $($_.Exception.Message)"
+                }
+            }
         }
     }
+}
 
-	# Return to parent
-    Set-Location -Path ..
+#endregion FUNCTIONS
+
+# Check out folder
+if (-not (Test-Path $OutFolder)) {
+    try {
+        New-Item -ItemType Directory -Path $OutFolder -Force -ErrorAction Stop
+    }
+    catch {
+        Write-Error -Exception $_.Exception -Message "Unable to create directory: $($_.Exception.Message)"
+        break
+    }
+}
+
+Set-Location -Path $OutFolder
+
+$baseContent = Invoke-WebRequest -Uri $BaseURI
+$baseDOM = $baseContent.ParsedHtml
+
+# Get chapter links
+$Chapters = $DOM.getElementsByTagName('a') | Where href -Match '^.+/c\d{3}/?$' | select -ExpandProperty href -Unique | sort #<#DEBBUG#>| Select -First 1
+
+foreach ($Chapter in $Chapters) {
+    $chapContent = Invoke-WebRequest -Uri $Chapter
+    $chapDOM = $chapContent.ParsedHtml
+
+    # Get pages links
+    $Pages = $chapDOM.getElementsByTagName('option') | select -ExpandProperty value -Unique #<#DEBBUG#>-First 1
+
+    $chapDir = Split-Path -Path ([uri]::new($Chapter).AbsolutePath) -Leaf
+    if (Test-Path "$OutFolder\$chapDir") {
+        Write-Warning "Folder [$OutFolder\$chapDir] exists - content may be overwritten!"
+    }
+    else {
+        New-Item -ItemType Directory -Path "$OutFolder\$chapDir" -Force
+    }
+
+    Set-Location -Path "$OutFolder\$chapDir"
+    
+    Write-Host -f Yellow "Chapter [$chapDir] - $($Pages.count) pages"
+
+    Get-MangaImage -PagesURI $Pages -Location "$OutFolder\$chapDir"
+
+    Set-Location -Path $OutFolder
 }
