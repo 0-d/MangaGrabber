@@ -17,11 +17,11 @@
 param(
 	[Parameter(Mandatory)]
     [ValidateScript({[uri]::New($_)})]
-	[string]$BaseURI, #ex.: 'http://www.mangatown.com/manga/angel_beats_heaven_s_door/',
+	[string]$BaseURI,
 
     [Parameter(Mandatory)]
     [ValidateScript({[System.IO.Path]::GetFullPath($_)})]
-    [string]$OutFolder #ex.: "C:\Downloads\Manga\Angel Beats! - Heaven's Door"
+    [string]$OutFolder
 )
 
 #region FUNCTIONS
@@ -34,14 +34,12 @@ workflow Get-MangaImage {
     )
 
     foreach -parallel ($Page in $PagesURI) {
-        #$pageContent = $pageDOM = $Images = $outImg = $null
-
         inlineScript {
             $pageContent = Invoke-WebRequest -Uri $using:Page -SessionVariable mangatown
             $pageDOM = $pageContent.ParsedHtml
 
             # Get images by ID (usually only one)
-            $Images = $pageDOM.getElementById('image') | select -ExpandProperty src
+            $Images = $pageDOM.getElementById('image') | Select-Object -ExpandProperty src
 
             Set-Location -Path $using:Location
             foreach ($img in $Images) {
@@ -61,6 +59,8 @@ workflow Get-MangaImage {
 
 #endregion FUNCTIONS
 
+#region MAIN
+
 # Check out folder
 if (-not (Test-Path $OutFolder)) {
     try {
@@ -72,20 +72,20 @@ if (-not (Test-Path $OutFolder)) {
     }
 }
 
-Set-Location -Path $OutFolder
-
+# Get contents of manga page
 $baseContent = Invoke-WebRequest -Uri $BaseURI
 $baseDOM = $baseContent.ParsedHtml
 
 # Get chapter links
-$Chapters = $DOM.getElementsByTagName('a') | Where href -Match '^.+/c\d{3}/?$' | select -ExpandProperty href -Unique | sort #<#DEBBUG#>| Select -First 1
+$Chapters = $DOM.getElementsByTagName('a') | Where-Object -FilterScript { $_.href -Match '^.+/c\d{3}/?$'} | 
+				Select-Object -ExpandProperty href -Unique | Sort-Object # for correct order
 
 foreach ($Chapter in $Chapters) {
     $chapContent = Invoke-WebRequest -Uri $Chapter
     $chapDOM = $chapContent.ParsedHtml
 
     # Get pages links
-    $Pages = $chapDOM.getElementsByTagName('option') | select -ExpandProperty value -Unique #<#DEBBUG#>-First 1
+    $Pages = $chapDOM.getElementsByTagName('option') | Select-Object -ExpandProperty value -Unique
 
     $chapDir = Split-Path -Path ([uri]::new($Chapter).AbsolutePath) -Leaf
     if (Test-Path "$OutFolder\$chapDir") {
@@ -94,12 +94,10 @@ foreach ($Chapter in $Chapters) {
     else {
         New-Item -ItemType Directory -Path "$OutFolder\$chapDir" -Force
     }
-
-    Set-Location -Path "$OutFolder\$chapDir"
-    
+	    
     Write-Host -f Yellow "Chapter [$chapDir] - $($Pages.count) pages"
 
     Get-MangaImage -PagesURI $Pages -Location "$OutFolder\$chapDir"
-
-    Set-Location -Path $OutFolder
 }
+
+#endregion MAIN
